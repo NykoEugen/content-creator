@@ -13,10 +13,16 @@ class OpenAIService:
         if not OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY не встановлено")
         
-        self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-        self.model = OPENAI_MODEL
-        self.max_tokens = OPENAI_MAX_TOKENS
-        self.temperature = OPENAI_TEMPERATURE
+        try:
+            # Створюємо клієнт без додаткових параметрів
+            self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+            self.model = OPENAI_MODEL
+            self.max_tokens = OPENAI_MAX_TOKENS
+            self.temperature = OPENAI_TEMPERATURE
+            logger.info("OpenAI клієнт успішно ініціалізовано")
+        except Exception as e:
+            logger.error(f"Помилка ініціалізації OpenAI клієнта: {e}")
+            raise
     
     async def generate_text(self, prompt: str, system_message: Optional[str] = None) -> str:
         """

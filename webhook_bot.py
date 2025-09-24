@@ -666,7 +666,7 @@ async def ask_handler(message: Message) -> None:
         await message.answer(f"🧠 <b>Відповідь:</b>\n\n{sanitized_response}", parse_mode="HTML")
         
     except Exception as e:
-        logger.error(f"Помилка в команді /ask: {e}")
+        logger.error(f"Помилка в команді /ask: {e}", exc_info=True)
         await message.answer(f"❌ Виникла помилка при обробці запиту: {str(e)}")
 
 @dp.message(Command("creative"))

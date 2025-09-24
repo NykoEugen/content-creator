@@ -14,10 +14,15 @@ class OpenAITTSService:
         if not OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY не встановлено")
         
-        self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-        self.model = OPENAI_TTS_MODEL
-        self.voice = OPENAI_TTS_VOICE
-        self.speed = OPENAI_TTS_SPEED
+        try:
+            self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+            self.model = OPENAI_TTS_MODEL
+            self.voice = OPENAI_TTS_VOICE
+            self.speed = OPENAI_TTS_SPEED
+            logger.info("OpenAI TTS клієнт успішно ініціалізовано")
+        except Exception as e:
+            logger.error(f"Помилка ініціалізації OpenAI TTS клієнта: {e}")
+            raise
     
     async def generate_speech(self, text: str, voice: Optional[str] = None, speed: Optional[float] = None) -> bytes:
         """

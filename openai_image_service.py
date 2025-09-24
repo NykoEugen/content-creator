@@ -15,10 +15,15 @@ class OpenAIImageService:
         if not OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY не встановлено")
         
-        self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-        self.model = OPENAI_IMAGE_MODEL
-        self.default_size = OPENAI_IMAGE_SIZE
-        self.default_quality = OPENAI_IMAGE_QUALITY
+        try:
+            self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+            self.model = OPENAI_IMAGE_MODEL
+            self.default_size = OPENAI_IMAGE_SIZE
+            self.default_quality = OPENAI_IMAGE_QUALITY
+            logger.info("OpenAI Image клієнт успішно ініціалізовано")
+        except Exception as e:
+            logger.error(f"Помилка ініціалізації OpenAI Image клієнта: {e}")
+            raise
     
     async def generate_image(self, prompt: str, size: Optional[str] = None, 
                            quality: Optional[str] = None, n: int = 1) -> List[bytes]:
