@@ -35,8 +35,13 @@ class UserStates(StatesGroup):
     waiting_for_image_size_setting = State()
     waiting_for_image_quality_setting = State()
 
-# Ініціалізація бота та диспетчера
-bot = Bot(token=BOT_TOKEN)
+# Ініціалізація бота та диспетчера з налаштуваннями timeout
+bot = Bot(
+    token=BOT_TOKEN,
+    request_timeout=30,  # Збільшуємо timeout до 30 секунд
+    connect_timeout=10,  # Timeout для підключення
+    read_timeout=30      # Timeout для читання відповіді
+)
 dp = Dispatcher()
 
 # Словник для зберігання налаштувань користувачів
@@ -66,6 +71,51 @@ def sanitize_telegram_text(text: str) -> str:
     text = re.sub(r'\s+', ' ', text).strip()
     
     return text
+
+async def safe_edit_message(callback: CallbackQuery, text: str, parse_mode: str = "HTML", reply_markup=None, max_retries: int = 3):
+    """
+    Безпечне редагування повідомлення з retry логікою та fallback
+    
+    Args:
+        callback: CallbackQuery об'єкт
+        text: Текст для відправки
+        parse_mode: Режим парсингу (HTML або Markdown)
+        reply_markup: Клавіатура для відповіді
+        max_retries: Максимальна кількість спроб
+    """
+    try:
+        # Спробуємо відредагувати повідомлення з retry логікою
+        for attempt in range(max_retries):
+            try:
+                await callback.message.edit_text(
+                    text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup
+                )
+                await callback.answer()
+                return True  # Успішно виконано
+            except Exception as e:
+                logger.warning(f"Спроба {attempt + 1} редагування повідомлення не вдалася: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)  # Затримка перед наступною спробою
+                else:
+                    # Якщо всі спроби не вдалися, відправляємо нове повідомлення
+                    logger.error(f"Всі спроби редагування не вдалися, відправляємо нове повідомлення")
+                    await callback.message.answer(
+                        text,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup
+                    )
+                    await callback.answer()
+                    return True
+    except Exception as e:
+        logger.error(f"Критична помилка в safe_edit_message: {e}")
+        # Останній fallback - просто відповідаємо на callback
+        try:
+            await callback.answer("❌ Помилка при оновленні меню")
+        except:
+            pass  # Якщо навіть це не спрацює, просто ігноруємо
+        return False
 
 def get_user_settings(user_id: int) -> dict:
     """Отримання налаштувань користувача"""
@@ -251,51 +301,69 @@ async def back_to_menu_callback(callback: CallbackQuery, state: FSMContext):
         f"OpenAI: {openai_status}"
     )
     
-    await callback.message.edit_text(
-        welcome_text,
+    await safe_edit_message(
+        callback=callback,
+        text=welcome_text,
         parse_mode="HTML",
         reply_markup=get_main_menu()
     )
-    await callback.answer()
 
 @dp.callback_query(F.data == "ask_ai")
 async def ask_ai_callback(callback: CallbackQuery, state: FSMContext):
     """Обробка натискання кнопки 'Запитати AI'"""
-    await callback.message.edit_text(
+    text = (
         "🤖 <b>Запитати AI</b>\n\n"
         "Напишіть ваш запит, і я відповім на нього за допомогою штучного інтелекту.\n\n"
-        "Приклад: Що таке машинне навчання?",
+        "Приклад: Що таке машинне навчання?"
+    )
+    
+    success = await safe_edit_message(
+        callback=callback,
+        text=text,
         parse_mode="HTML",
         reply_markup=get_back_to_menu_keyboard()
     )
-    await state.set_state(UserStates.waiting_for_text)
-    await callback.answer()
+    
+    if success:
+        await state.set_state(UserStates.waiting_for_text)
 
 @dp.callback_query(F.data == "creative")
 async def creative_callback(callback: CallbackQuery, state: FSMContext):
     """Обробка натискання кнопки 'Креативне письмо'"""
-    await callback.message.edit_text(
+    text = (
         "✨ <b>Креативне письмо</b>\n\n"
         "Опишіть тему або жанр, і я створю креативний текст.\n\n"
-        "Приклад: Напиши вірш про зиму",
+        "Приклад: Напиши вірш про зиму"
+    )
+    
+    success = await safe_edit_message(
+        callback=callback,
+        text=text,
         parse_mode="HTML",
         reply_markup=get_back_to_menu_keyboard()
     )
-    await state.set_state(UserStates.waiting_for_creative_prompt)
-    await callback.answer()
+    
+    if success:
+        await state.set_state(UserStates.waiting_for_creative_prompt)
 
 @dp.callback_query(F.data == "code")
 async def code_callback(callback: CallbackQuery, state: FSMContext):
     """Обробка натискання кнопки 'Генерація коду'"""
-    await callback.message.edit_text(
+    text = (
         "💻 <b>Генерація коду</b>\n\n"
         "Опишіть, який код потрібно згенерувати.\n\n"
-        "Приклад: Створи функцію сортування масиву",
+        "Приклад: Створи функцію сортування масиву"
+    )
+    
+    success = await safe_edit_message(
+        callback=callback,
+        text=text,
         parse_mode="HTML",
         reply_markup=get_back_to_menu_keyboard()
     )
-    await state.set_state(UserStates.waiting_for_code_prompt)
-    await callback.answer()
+    
+    if success:
+        await state.set_state(UserStates.waiting_for_code_prompt)
 
 @dp.callback_query(F.data == "translate")
 async def translate_callback(callback: CallbackQuery, state: FSMContext):
@@ -428,13 +496,17 @@ async def info_callback(callback: CallbackQuery):
 @dp.callback_query(F.data == "settings")
 async def settings_callback(callback: CallbackQuery):
     """Обробка натискання кнопки 'Налаштування'"""
-    await callback.message.edit_text(
+    text = (
         "⚙️ <b>Налаштування</b>\n\n"
-        "Оберіть параметр для зміни:",
+        "Оберіть параметр для зміни:"
+    )
+    
+    await safe_edit_message(
+        callback=callback,
+        text=text,
         parse_mode="HTML",
         reply_markup=get_settings_menu_keyboard()
     )
-    await callback.answer()
 
 @dp.callback_query(F.data == "settings_voice")
 async def settings_voice_callback(callback: CallbackQuery):
