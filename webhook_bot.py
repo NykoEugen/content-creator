@@ -35,8 +35,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------- Ініціалізація бота з сесією (таймаути + keep-alive) ----------
-from aiohttp import ClientTimeout
-from aiogram.client.session.aiohttp import AiohttpSession
 
 _session = AiohttpSession(
     timeout=ClientTimeout(total=None, connect=10, sock_read=180)
@@ -184,6 +182,77 @@ async def send_media_group_with_retry(chat_id: int, media: list[InputMediaPhoto]
             if attempt == max_attempts:
                 raise
             await asyncio.sleep(0.7 * attempt)
+
+# ---------- Ретраї для відправок/редагувань/войсів/медіа ----------
+async def send_message_with_retry(chat_id: int, text: str, parse_mode: str = "HTML", reply_markup=None, max_attempts: int = 3):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(int(getattr(e, "retry_after", 1)))
+        except TelegramNetworkError:
+            if attempt == max_attempts:
+                raise
+            await asyncio.sleep(0.7 * attempt)
+
+async def edit_message_with_retry(chat_id: int, message_id: int, text: str, parse_mode: str = "HTML", reply_markup=None, max_attempts: int = 3):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+        except TelegramBadRequest as e:
+            msg = str(e)
+            if "message is not modified" in msg:
+                return
+            if "query is too old" in msg or "message to edit not found" in msg:
+                return await bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+            raise
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(int(getattr(e, "retry_after", 1)))
+        except TelegramNetworkError:
+            if attempt == max_attempts:
+                raise
+            await asyncio.sleep(0.7 * attempt)
+
+async def delete_message_silent(chat_id: int, message_id: int):
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass
+
+async def send_voice_with_retry(chat_id: int, voice_bytes: bytes, caption: str = None, parse_mode: str = "HTML", filename: str = "speech.mp3", max_attempts: int = 3):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            audio_input = types.BufferedInputFile(file=voice_bytes, filename=filename)
+            return await bot.send_voice(chat_id, voice=audio_input, caption=caption, parse_mode=parse_mode)
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(int(getattr(e, "retry_after", 1)))
+        except TelegramNetworkError:
+            if attempt == max_attempts:
+                raise
+            await asyncio.sleep(0.7 * attempt)
+
+async def send_photo_with_retry(chat_id: int, photo: BufferedInputFile, caption: str = None, parse_mode: str = "HTML", max_attempts: int = 3):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await bot.send_photo(chat_id, photo=photo, caption=caption, parse_mode=parse_mode)
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(int(getattr(e, "retry_after", 1)))
+        except TelegramNetworkError:
+            if attempt == max_attempts:
+                raise
+            await asyncio.sleep(0.7 * attempt)
+
+async def send_media_group_with_retry(chat_id: int, media: list[InputMediaPhoto], max_attempts: int = 3):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await bot.send_media_group(chat_id, media=media)
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(int(getattr(e, "retry_after", 1)))
+        except TelegramNetworkError:
+            if attempt == max_attempts:
+                raise
+            await asyncio.sleep(0.7 * attempt)
+# -------------------------------------------------------------------
 
 def get_user_settings(user_id: int) -> dict:
     """Отримання налаштувань користувача"""
