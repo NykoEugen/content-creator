@@ -4,6 +4,8 @@ import os
 import re
 from typing import Optional
 
+from aiogram.exceptions import TelegramRetryAfter
+from aiogram.types import InputMediaPhoto
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import CommandStart, Command
@@ -161,6 +163,27 @@ async def safe_edit_message_text(
             attempt += 1
             await asyncio.sleep(0.7 * attempt)
 
+async def send_photo_with_retry(chat_id: int, photo: BufferedInputFile, caption: str = None, parse_mode: str = "HTML", max_attempts: int = 3):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await bot.send_photo(chat_id, photo=photo, caption=caption, parse_mode=parse_mode)
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(int(getattr(e, "retry_after", 1)))
+        except TelegramNetworkError:
+            if attempt == max_attempts:
+                raise
+            await asyncio.sleep(0.7 * attempt)
+
+async def send_media_group_with_retry(chat_id: int, media: list[InputMediaPhoto], max_attempts: int = 3):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await bot.send_media_group(chat_id, media=media)
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(int(getattr(e, "retry_after", 1)))
+        except TelegramNetworkError:
+            if attempt == max_attempts:
+                raise
+            await asyncio.sleep(0.7 * attempt)
 
 def get_user_settings(user_id: int) -> dict:
     """Отримання налаштувань користувача"""
@@ -640,46 +663,81 @@ async def image_handler(message: Message) -> None:
         await message.answer("❌ OpenAI API ключ не налаштовано. Зверніться до адміністратора.")
         return
 
-    prompt = message.text.replace("/image", "").strip()
+    prompt = message.text.replace('/image', '').strip()
     if not prompt:
         await message.answer("Опишіть зображення, яке потрібно згенерувати після команди /image\nНаприклад: /image Кіт, що грає з м'ячем")
         return
 
-    try:
-        thinking_msg = await message.answer("🎨 Створюю 2 варіанти зображення...")
+    # миттєвий ACK користувачу — і повертаємо контроль webhook'у
+    status = await message.answer("🎨 Створюю 2 варіанти зображення… Це може зайняти до хвилини.")
 
-        user_id = message.from_user.id
-        settings = get_user_settings(user_id)
+    async def _worker():
+        try:
+            user_id = message.from_user.id
+            settings = get_user_settings(user_id)
+            image_service = get_openai_image_service()
 
-        image_service = get_openai_image_service()
-        image_bytes_list = await image_service.generate_image(
-            prompt, size=settings["image_size"], quality=settings["image_quality"], n=2
-        )
-
-        logger.info(f"Отримано результат генерації зображення: {len(image_bytes_list) if image_bytes_list else 0} зображень")
-        await thinking_msg.delete()
-
-        if image_bytes_list and len(image_bytes_list) >= 2:
-            for i, image_bytes in enumerate(image_bytes_list[:2], 1):
-                photo_file = BufferedInputFile(image_bytes, filename=f"generated_image_{i}.png")
-                await message.answer_photo(
-                    photo=photo_file,
-                    caption=f"🖼️ <b>Варіант {i}:</b> {prompt}\nРозмір: {settings['image_size']}, Якість: {settings['image_quality'].upper()}",
-                    parse_mode="HTML",
-                )
-        elif image_bytes_list and len(image_bytes_list) == 1:
-            image_bytes = image_bytes_list[0]
-            photo_file = BufferedInputFile(image_bytes, filename="generated_image.png")
-            await message.answer_photo(
-                photo=photo_file,
-                caption=f"🖼️ <b>Згенероване зображення:</b> {prompt}\nРозмір: {settings['image_size']}, Якість: {settings['image_quality'].upper()}",
-                parse_mode="HTML",
+            # Генеруємо 2 варіанти
+            image_bytes_list = await image_service.generate_image(
+                prompt,
+                size=settings['image_size'],
+                quality=settings['image_quality'],
+                n=2
             )
-        else:
-            await message.answer("❌ Не вдалося згенерувати зображення або отримано порожній результат")
-    except Exception as e:
-        logger.error(f"Помилка в команді /image: {e}")
-        await message.answer(f"❌ Виникла помилка при генерації зображення: {str(e)}")
+
+            if not image_bytes_list:
+                await bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=status.message_id,
+                    text="❌ Не вдалося згенерувати зображення."
+                )
+                return
+
+            # Якщо є 2 і більше — шлемо однією media_group (швидше і надійніше)
+            if len(image_bytes_list) >= 2:
+                media = []
+                for i, image_bytes in enumerate(image_bytes_list[:2], 1):
+                    media.append(
+                        InputMediaPhoto(
+                            media=BufferedInputFile(image_bytes, filename=f"generated_image_{i}.png"),
+                            caption=(f"🖼️ <b>Варіант {i}</b>\n"
+                                     f"Опис: {sanitize_telegram_text(prompt)[:800]}\n"
+                                     f"Розмір: {settings['image_size']}, Якість: {settings['image_quality'].upper()}") if i == 1 else None,
+                            parse_mode="HTML"
+                        )
+                    )
+                await send_media_group_with_retry(message.chat.id, media)
+                await safe_edit_message_text(
+                    bot, message.chat.id, status.message_id,
+                    "✅ Згенеровано 2 зображення.", reply_markup=get_back_to_menu_keyboard()
+                )
+            else:
+                # один варіант — звичайна відправка
+                photo_file = BufferedInputFile(image_bytes_list[0], filename="generated_image.png")
+                await send_photo_with_retry(
+                    chat_id=message.chat.id,
+                    photo=photo_file,
+                    caption=(f"🖼️ <b>Згенероване зображення</b>\n"
+                             f"Опис: {sanitize_telegram_text(prompt)[:800]}\n"
+                             f"Розмір: {settings['image_size']}, Якість: {settings['image_quality'].upper()}"),
+                    parse_mode="HTML"
+                )
+                await safe_edit_message_text(
+                    bot, message.chat.id, status.message_id,
+                    "✅ Зображення згенеровано.", reply_markup=get_back_to_menu_keyboard()
+                )
+
+        except Exception as e:
+            logger.error(f"Помилка в команді /image (фон): {e}")
+            try:
+                await safe_edit_message_text(
+                    bot, message.chat.id, status.message_id,
+                    f"❌ Виникла помилка при генерації зображення: {e}", reply_markup=get_back_to_menu_keyboard()
+                )
+            except Exception:
+                pass
+
+    asyncio.create_task(_worker())
 
 
 @dp.message(Command("image_debug"))
@@ -1167,43 +1225,72 @@ async def handle_image_text(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    try:
-        thinking_msg = await message.answer("🎨 Створюю 2 варіанти зображення...")
+    status = await message.answer("🎨 Створюю 2 варіанти зображення… Це може зайняти до хвилини.")
 
-        user_id = message.from_user.id
-        settings = get_user_settings(user_id)
+    async def _worker():
+        try:
+            user_id = message.from_user.id
+            settings = get_user_settings(user_id)
+            image_service = get_openai_image_service()
 
-        image_service = get_openai_image_service()
-        image_bytes_list = await image_service.generate_image(
-            message.text, size=settings["image_size"], quality=settings["image_quality"], n=2
-        )
-
-        await thinking_msg.delete()
-
-        if image_bytes_list and len(image_bytes_list) >= 2:
-            for i, image_bytes in enumerate(image_bytes_list[:2], 1):
-                photo_file = BufferedInputFile(image_bytes, filename=f"generated_image_{i}.png")
-                await message.answer_photo(
-                    photo=photo_file,
-                    caption=f"🖼️ <b>Варіант {i}:</b> {message.text}\nРозмір: {settings['image_size']}, Якість: {settings['image_quality'].upper()}",
-                    parse_mode="HTML",
-                )
-            await message.answer("✅ Згенеровано 2 варіанти зображення!", reply_markup=get_back_to_menu_keyboard())
-        elif image_bytes_list and len(image_bytes_list) == 1:
-            image_bytes = image_bytes_list[0]
-            photo_file = BufferedInputFile(image_bytes, filename="generated_image.png")
-            await message.answer_photo(
-                photo=photo_file,
-                caption=f"🖼️ <b>Згенероване зображення:</b> {message.text}\nРозмір: {settings['image_size']}, Якість: {settings['image_quality'].upper()}",
-                parse_mode="HTML",
+            image_bytes_list = await image_service.generate_image(
+                message.text,
+                size=settings['image_size'],
+                quality=settings['image_quality'],
+                n=2
             )
-            await message.answer("✅ Зображення згенеровано! (Отримано 1 варіант замість 2)", reply_markup=get_back_to_menu_keyboard())
-        else:
-            await message.answer("❌ Не вдалося згенерувати зображення", reply_markup=get_back_to_menu_keyboard())
-    except Exception as e:
-        logger.error(f"Помилка в генерації зображення: {e}")
-        await message.answer(f"❌ Виникла помилка при генерації зображення: {str(e)}", reply_markup=get_back_to_menu_keyboard())
-    await state.clear()
+
+            if not image_bytes_list:
+                await safe_edit_message_text(
+                    bot, message.chat.id, status.message_id,
+                    "❌ Не вдалося згенерувати зображення", reply_markup=get_back_to_menu_keyboard()
+                )
+                return
+
+            if len(image_bytes_list) >= 2:
+                media = []
+                for i, image_bytes in enumerate(image_bytes_list[:2], 1):
+                    media.append(
+                        InputMediaPhoto(
+                            media=BufferedInputFile(image_bytes, filename=f"generated_image_{i}.png"),
+                            caption=(f"🖼️ <b>Варіант {i}</b>\n"
+                                     f"Опис: {sanitize_telegram_text(message.text)[:800]}\n"
+                                     f"Розмір: {settings['image_size']}, Якість: {settings['image_quality'].upper()}") if i == 1 else None,
+                            parse_mode="HTML"
+                        )
+                    )
+                await send_media_group_with_retry(message.chat.id, media)
+                await safe_edit_message_text(
+                    bot, message.chat.id, status.message_id,
+                    "✅ Згенеровано 2 зображення!", reply_markup=get_back_to_menu_keyboard()
+                )
+            else:
+                photo_file = BufferedInputFile(image_bytes_list[0], filename="generated_image.png")
+                await send_photo_with_retry(
+                    chat_id=message.chat.id,
+                    photo=photo_file,
+                    caption=(f"🖼️ <b>Згенероване зображення</b>\n"
+                             f"Опис: {sanitize_telegram_text(message.text)[:800]}\n"
+                             f"Розмір: {settings['image_size']}, Якість: {settings['image_quality'].upper()}"),
+                    parse_mode="HTML"
+                )
+                await safe_edit_message_text(
+                    bot, message.chat.id, status.message_id,
+                    "✅ Зображення згенеровано!", reply_markup=get_back_to_menu_keyboard()
+                )
+        except Exception as e:
+            logger.error(f"Помилка в генерації зображення (стан): {e}")
+            try:
+                await safe_edit_message_text(
+                    bot, message.chat.id, status.message_id,
+                    f"❌ Виникла помилка при генерації зображення: {e}", reply_markup=get_back_to_menu_keyboard()
+                )
+            except Exception:
+                pass
+        finally:
+            await state.clear()
+
+    asyncio.create_task(_worker())
 
 
 # Обробник введення власної швидкості
