@@ -33,9 +33,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------- Ініціалізація бота з сесією (таймаути + keep-alive) ----------
+from aiohttp import ClientTimeout
+from aiogram.client.session.aiohttp import AiohttpSession
+
 _session = AiohttpSession(
-    timeout=ClientTimeout(total=30, connect=10, sock_read=20),
-    connector=TCPConnector(keepalive_timeout=30, limit=100),
+    timeout=ClientTimeout(total=30, connect=10, sock_read=20)
 )
 bot = Bot(token=BOT_TOKEN, session=_session)
 dp = Dispatcher()
