@@ -700,40 +700,52 @@ async def tts_handler(message: Message) -> None:
 
 @dp.message(Command("tts_settings"))
 async def tts_settings_handler(message: Message) -> None:
+    """Команда для налаштувань TTS"""
     if not OPENAI_API_KEY:
         await message.answer("❌ OpenAI API ключ не налаштовано. Зверніться до адміністратора.")
         return
 
     try:
         tts_service = get_openai_tts_service()
-        current_voice = tts_service.voice
-        current_speed = tts_service.speed
-        available_voices = tts_service.get_available_voices()
-        speed_range = tts_service.get_speed_range()
 
-        settings_text = f"""
-🎤 <b>Налаштування TTS</b>
+        # ⬇️ ЦІ ДВА ВИКЛИКИ ПОТРІБНО AWAIT
+        available_voices = await tts_service.get_available_voices()
+        speed_range = await tts_service.get_speed_range()
 
-<b>Поточні налаштування:</b>
-• Голос: <code>{current_voice}</code>
-• Швидкість: <code>{current_speed}x</code>
+        # Якщо в сервісі є ще поточні налаштування як корутини — теж await
+        current_voice = getattr(tts_service, "voice", None)
+        current_speed = getattr(tts_service, "speed", None)
+        if callable(current_voice):
+            current_voice = await current_voice()
+        if callable(current_speed):
+            current_speed = await current_speed()
 
-<b>Доступні голоси:</b>
-{', '.join(available_voices)}
+        # Підстрахуємось на випадок, якщо сервіс повернув None
+        available_voices = available_voices or []
+        if not isinstance(available_voices, (list, tuple)):
+            available_voices = list(available_voices)
 
-<b>Діапазон швидкості:</b>
-{speed_range[0]}x - {speed_range[1]}x (1.0 = нормальна)
+        # Формуємо текст відповіді
+        settings_text = (
+            "🎤 <b>Налаштування TTS</b>\n\n"
+            f"<b>Поточні налаштування:</b>\n"
+            f"• Голос: <code>{current_voice or 'alloy'}</code>\n"
+            f"• Швидкість: <code>{current_speed or 1.0}x</code>\n\n"
+            f"<b>Доступні голоси:</b>\n{', '.join(map(str, available_voices)) or '—'}\n\n"
+            f"<b>Діапазон швидкості:</b>\n"
+            f"{(speed_range[0] if speed_range else 0.25)}x - {(speed_range[1] if speed_range else 4.0)}x (1.0 = нормальна)\n\n"
+            "<b>Приклади використання:</b>\n"
+            "• <code>/tts Привіт!</code>\n"
+            "• <code>/tts Привіт! | 1.5</code>\n"
+            "• <code>/tts Привіт! | nova</code>\n"
+            "• <code>/tts Привіт! | echo | 0.8</code>\n"
+        )
 
-<b>Приклади використання:</b>
-• <code>/tts Привіт!</code> - звичайна озвучка
-• <code>/tts Привіт! | 1.5</code> - швидкість 1.5x
-• <code>/tts Привіт! | nova</code> - голос nova
-• <code>/tts Привіт! | echo | 0.8</code> - голос echo, швидкість 0.8x
-        """
-        await message.answer(settings_text, parse_mode="HTML")
+        await send_message_with_retry(message.chat.id, settings_text, parse_mode="HTML")
+
     except Exception as e:
         logger.error(f"Помилка в команді /tts_settings: {e}")
-        await message.answer(f"❌ Виникла помилка при отриманні налаштувань: {str(e)}")
+        await send_message_with_retry(message.chat.id, f"❌ Виникла помилка при отриманні налаштувань: {str(e)}")
 
 
 @dp.message(Command("image"))
