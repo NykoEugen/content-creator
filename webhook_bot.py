@@ -37,7 +37,7 @@ from aiohttp import ClientTimeout
 from aiogram.client.session.aiohttp import AiohttpSession
 
 _session = AiohttpSession(
-    timeout=ClientTimeout(total=30, connect=10, sock_read=20)
+    timeout=ClientTimeout(total=None, connect=10, sock_read=180)
 )
 bot = Bot(token=BOT_TOKEN, session=_session)
 dp = Dispatcher()
