@@ -559,64 +559,74 @@ async def tts_handler(message: Message) -> None:
         await message.answer("❌ OpenAI API ключ не налаштовано. Зверніться до адміністратора.")
         return
 
-    command_text = message.text.replace("/tts", "").strip()
+    command_text = message.text.replace('/tts', '').strip()
     if not command_text:
         await message.answer(
             "🎤 <b>Озвучка тексту</b>\n\n"
             "Використання:\n"
-            "• <code>/tts Привіт, як справи?</code> - звичайна озвучка\n"
-            "• <code>/tts Привіт, як справи? | 1.5</code> - озвучка зі швидкістю 1.5x\n"
-            "• <code>/tts Привіт, як справи? | alloy | 1.5</code> - з голосом та швидкістю\n\n"
-            "Голоси: alloy, echo, fable, onyx, nova, shimmer\n"
-            "Швидкість: 0.25 - 4.0 (1.0 = нормальна)",
-            parse_mode="HTML",
+            "• <code>/tts Привіт, як справи?</code>\n"
+            "• <code>/tts Привіт | 1.5</code>\n"
+            "• <code>/tts Привіт | alloy | 1.5</code>\n\n"
+            "Голоси: alloy, echo, fable, onyx, nova, shimmer\nШвидкість: 0.25–4.0",
+            parse_mode="HTML"
         )
         return
 
-    try:
-        parts = command_text.split("|")
-        text = parts[0].strip()
-        if not text:
-            await message.answer("❌ Введіть текст для озвучування")
+    parts = command_text.split('|')
+    text = parts[0].strip()
+    if not text:
+        await message.answer("❌ Введіть текст для озвучування")
+        return
+
+    voice = None
+    speed = None
+    if len(parts) >= 2:
+        voice = parts[1].strip()
+    if len(parts) >= 3:
+        try:
+            speed = float(parts[2].strip())
+        except ValueError:
+            await message.answer("❌ Невірний формат швидкості. Використовуйте число (наприклад: 1.5)")
             return
 
-        voice = None
-        speed = None
-        if len(parts) >= 2:
-            voice = parts[1].strip()
-        if len(parts) >= 3:
-            try:
-                speed = float(parts[2].strip())
-            except ValueError:
-                await message.answer("❌ Невірний формат швидкості. Використовуйте число (наприклад: 1.5)")
-                return
+    status = await send_message_with_retry(message.chat.id, "🎤 Генерую озвучку...")
 
-        thinking_msg = await message.answer("🎤 Генерую озвучку...")
+    async def _worker():
+        try:
+            # налаштування користувача
+            user_id = message.from_user.id
+            settings = get_user_settings(user_id)
+            final_voice = voice or settings['voice']
+            final_speed = speed if speed is not None else settings['speed']
 
-        user_id = message.from_user.id
-        settings = get_user_settings(user_id)
-        final_voice = voice or settings["voice"]
-        final_speed = speed if speed is not None else settings["speed"]
+            tts_service = get_openai_tts_service()
+            audio_data = await tts_service.generate_speech_with_validation(text, final_voice, final_speed)
 
-        tts_service = get_openai_tts_service()
-        audio_data = await tts_service.generate_speech_with_validation(text, final_voice, final_speed)
+            caption_parts = [f"🔊 <b>Озвучка:</b> {sanitize_telegram_text(text)[:800]}"]
+            caption_parts.append(f"Голос: {final_voice}")
+            caption_parts.append(f"Швидкість: {final_speed}x")
 
-        await thinking_msg.delete()
+            await send_voice_with_retry(
+                chat_id=message.chat.id,
+                voice_bytes=audio_data,
+                caption="\n".join(caption_parts),
+                parse_mode="HTML",
+                filename="speech.mp3"
+            )
 
-        caption_parts = [f"🔊 <b>Озвучка:</b> {text}"]
-        if voice:
-            caption_parts.append(f"Голос: {voice}")
-        if speed:
-            caption_parts.append(f"Швидкість: {speed}x")
+            await edit_message_with_retry(
+                message.chat.id, status.message_id,
+                "✅ Озвучка готова!",
+                reply_markup=get_back_to_menu_keyboard()
+            )
 
-        audio_input = types.BufferedInputFile(file=audio_data, filename="speech.mp3")
-        await message.answer_voice(voice=audio_input, caption="\n".join(caption_parts), parse_mode="HTML")
+        except ValueError as e:
+            await edit_message_with_retry(message.chat.id, status.message_id, f"❌ Помилка параметрів: {str(e)}")
+        except Exception as e:
+            logger.error(f"Помилка в /tts (фон): {e}")
+            await edit_message_with_retry(message.chat.id, status.message_id, f"❌ Виникла помилка при генерації озвучки: {str(e)}")
 
-    except ValueError as e:
-        await message.answer(f"❌ Помилка параметрів: {str(e)}")
-    except Exception as e:
-        logger.error(f"Помилка в команді /tts: {e}")
-        await message.answer(f"❌ Виникла помилка при генерації озвучки: {str(e)}")
+    asyncio.create_task(_worker())
 
 
 @dp.message(Command("tts_settings"))
@@ -1191,31 +1201,43 @@ async def handle_tts_text(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    try:
-        thinking_msg = await message.answer("🎤 Генерую озвучку...")
+    status = await send_message_with_retry(message.chat.id, "🎤 Генерую озвучку...")
 
-        user_id = message.from_user.id
-        settings = get_user_settings(user_id)
+    async def _worker():
+        try:
+            user_id = message.from_user.id
+            settings = get_user_settings(user_id)
+            tts_service = get_openai_tts_service()
+            audio_data = await tts_service.generate_speech_with_validation(
+                message.text, voice=settings['voice'], speed=settings['speed']
+            )
 
-        tts_service = get_openai_tts_service()
-        audio_data = await tts_service.generate_speech_with_validation(
-            message.text, voice=settings["voice"], speed=settings["speed"]
-        )
-        await thinking_msg.delete()
+            await send_voice_with_retry(
+                chat_id=message.chat.id,
+                voice_bytes=audio_data,
+                caption=(f"🔊 <b>Озвучка:</b> {sanitize_telegram_text(message.text)[:800]}\n"
+                         f"Голос: {settings['voice']}, Швидкість: {settings['speed']}x"),
+                parse_mode="HTML",
+                filename="speech.mp3"
+            )
 
-        audio_input = types.BufferedInputFile(file=audio_data, filename="speech.mp3")
-        await message.answer_voice(
-            voice=audio_input,
-            caption=f"🔊 <b>Озвучка:</b> {message.text}\nГолос: {settings['voice']}, Швидкість: {settings['speed']}x",
-            parse_mode="HTML",
-        )
-        await message.answer("✅ Озвучка готова!", reply_markup=get_back_to_menu_keyboard())
-    except Exception as e:
-        logger.error(f"Помилка в озвучуванні: {e}")
-        await message.answer(
-            f"❌ Виникла помилка при генерації озвучки: {str(e)}", reply_markup=get_back_to_menu_keyboard()
-        )
-    await state.clear()
+            await edit_message_with_retry(
+                message.chat.id, status.message_id,
+                "✅ Озвучка готова!",
+                reply_markup=get_back_to_menu_keyboard()
+            )
+
+        except Exception as e:
+            logger.error(f"Помилка в озвучуванні: {e}")
+            await edit_message_with_retry(
+                message.chat.id, status.message_id,
+                f"❌ Виникла помилка при генерації озвучки: {str(e)}",
+                reply_markup=get_back_to_menu_keyboard()
+            )
+        finally:
+            await state.clear()
+
+    asyncio.create_task(_worker())
 
 
 @dp.message(UserStates.waiting_for_image_prompt)
