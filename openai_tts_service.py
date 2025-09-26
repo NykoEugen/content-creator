@@ -1,167 +1,207 @@
+import asyncio
 import logging
-import io
-from typing import Optional
-from openai import AsyncOpenAI
-from config import OPENAI_API_KEY, OPENAI_TTS_MODEL, OPENAI_TTS_VOICE, OPENAI_TTS_SPEED
+import os
+from typing import List, Tuple, Optional
+
+import httpx
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 logger = logging.getLogger(__name__)
 
-class OpenAITTSService:
-    """Сервіс для роботи з OpenAI TTS API (генерація озвучки)"""
-    
-    def __init__(self):
-        """Ініціалізація клієнта OpenAI для TTS"""
-        if not OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY не встановлено")
-        
-        try:
-            self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-            self.model = OPENAI_TTS_MODEL
-            self.voice = OPENAI_TTS_VOICE
-            self.speed = OPENAI_TTS_SPEED
-            logger.info("OpenAI TTS клієнт успішно ініціалізовано")
-        except Exception as e:
-            logger.error(f"Помилка ініціалізації OpenAI TTS клієнта: {e}")
-            raise
-    
-    async def generate_speech(self, text: str, voice: Optional[str] = None, speed: Optional[float] = None) -> bytes:
-        """
-        Генерація озвучки з тексту
-        
-        Args:
-            text: Текст для озвучування
-            voice: Голос для озвучки (alloy, echo, fable, onyx, nova, shimmer)
-            speed: Швидкість мовлення (0.25 - 4.0)
-            
-        Returns:
-            Аудіо дані у форматі MP3
-        """
-        try:
-            # Використовуємо вказані параметри або дефолтні
-            selected_voice = voice or self.voice
-            selected_speed = speed if speed is not None else self.speed
-            
-            # Валідація швидкості
-            if not (0.25 <= selected_speed <= 4.0):
-                raise ValueError(f"Швидкість мовлення повинна бути в діапазоні 0.25-4.0, отримано: {selected_speed}")
-            
-            logger.info(f"Генерація озвучки для тексту: {text[:100]}...")
-            logger.info(f"Використовується голос: {selected_voice}, модель: {self.model}, швидкість: {selected_speed}")
-            
-            response = await self.client.audio.speech.create(
-                model=self.model,
-                voice=selected_voice,
-                input=text,
-                speed=selected_speed
-            )
-            
-            # Отримуємо аудіо дані
-            audio_data = response.content
-            logger.info(f"Отримано аудіо дані розміром: {len(audio_data)} байт")
-            
-            return audio_data
-            
-        except Exception as e:
-            logger.error(f"Помилка при генерації озвучки: {e}")
-            raise Exception(f"Не вдалося згенерувати озвучку: {str(e)}")
-    
-    async def generate_speech_to_file(self, text: str, filename: str, voice: Optional[str] = None, speed: Optional[float] = None) -> str:
-        """
-        Генерація озвучки та збереження у файл
-        
-        Args:
-            text: Текст для озвучування
-            filename: Назва файлу для збереження
-            voice: Голос для озвучки
-            speed: Швидкість мовлення
-            
-        Returns:
-            Шлях до збереженого файлу
-        """
-        try:
-            audio_data = await self.generate_speech(text, voice, speed)
-            
-            # Зберігаємо аудіо дані у файл
-            with open(filename, 'wb') as f:
-                f.write(audio_data)
-            
-            logger.info(f"Озвучка збережена у файл: {filename}")
-            return filename
-            
-        except Exception as e:
-            logger.error(f"Помилка при збереженні озвучки у файл: {e}")
-            raise Exception(f"Не вдалося зберегти озвучку у файл: {str(e)}")
-    
-    async def get_available_voices(self) -> list:
-        """
-        Отримання списку доступних голосів
-        
-        Returns:
-            Список доступних голосів
-        """
-        return ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']
-    
-    def validate_voice(self, voice: str) -> bool:
-        """
-        Перевірка чи є голос валідним
-        
-        Args:
-            voice: Назва голосу для перевірки
-            
-        Returns:
-            True якщо голос валідний, False інакше
-        """
-        available_voices = self.get_available_voices()
-        return voice.lower() in available_voices
-    
-    def validate_speed(self, speed: float) -> bool:
-        """
-        Перевірка чи є швидкість валідною
-        
-        Args:
-            speed: Швидкість мовлення для перевірки
-            
-        Returns:
-            True якщо швидкість валідна, False інакше
-        """
-        return 0.25 <= speed <= 4.0
-    
-    def get_speed_range(self) -> tuple:
-        """
-        Отримання діапазону допустимих швидкостей
-        
-        Returns:
-            Кортеж (мінімальна_швидкість, максимальна_швидкість)
-        """
-        return (0.25, 4.0)
-    
-    async def generate_speech_with_validation(self, text: str, voice: Optional[str] = None, speed: Optional[float] = None) -> bytes:
-        """
-        Генерація озвучки з валідацією параметрів
-        
-        Args:
-            text: Текст для озвучування
-            voice: Голос для озвучки
-            speed: Швидкість мовлення
-            
-        Returns:
-            Аудіо дані у форматі MP3
-        """
-        if voice and not self.validate_voice(voice):
-            available_voices = await self.get_available_voices()
-            raise ValueError(f"Невірний голос '{voice}'. Доступні голоси: {', '.join(available_voices)}")
-        
-        if speed is not None and not (0.25 <= speed <= 4.0):
-            raise ValueError(f"Швидкість мовлення повинна бути в діапазоні 0.25-4.0, отримано: {speed}")
-        
-        return await self.generate_speech(text, voice, speed)
 
-# Створюємо глобальний екземпляр сервісу
-openai_tts_service = None
+class OpenAITTSService:
+    """
+    Асинхронний сервіс для TTS через OpenAI:
+      - ретраї при 429/5xx та мережевих помилках
+      - контроль таймаутів
+      - зручні хелпери get_available_voices() / get_speed_range()
+      - generate_speech_with_validation(text, voice, speed) -> bytes (mp3)
+    """
+
+    # Стабільні значення за замовчуванням
+    _DEFAULT_MODEL = "gpt-4o-mini-tts"
+    _DEFAULT_VOICE = "alloy"
+    _DEFAULT_SPEED = 1.0
+    _MIN_SPEED = 0.25
+    _MAX_SPEED = 4.0
+    _VOICES = ("alloy", "echo", "fable", "onyx", "nova", "shimmer")
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        request_timeout: float = 60.0,   # загальний таймаут на запит
+        connect_timeout: float = 10.0,   # конект
+        read_timeout: float = 180.0,     # очікування відповіді (довше, бо TTS)
+        write_timeout: float = 60.0,     # надсилання тіла
+        max_retries: int = 3,
+    ):
+        api_key = api_key or OPENAI_API_KEY
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is not set")
+
+        self.api_key = api_key
+        self.model = model or self._DEFAULT_MODEL
+        self.voice = self._DEFAULT_VOICE
+        self.speed = self._DEFAULT_SPEED
+        self.max_retries = max_retries
+
+        # httpx AsyncClient з таймаутами
+        self._timeout = httpx.Timeout(
+            timeout=request_timeout,
+            connect=connect_timeout,
+            read=read_timeout,
+            write=write_timeout,
+        )
+        # HTTP/1.1 keep-alive
+        self._client = httpx.AsyncClient(
+            base_url="https://api.openai.com/v1",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=self._timeout,
+            http2=False,
+        )
+
+        logger.info("OpenAI TTS клієнт успішно ініціалізовано")
+
+    # ---------- Публічні async-хелпери (їх ПОТРІБНО await-ити) ----------
+
+    async def get_available_voices(self) -> List[str]:
+        """
+        Повертає список допустимих голосів.
+        Можна зробити реальний запит до API, але статичний whitelist надійніший.
+        """
+        # Якщо колись захочеш фетчити з мережі — просто зроби тут запит.
+        await asyncio.sleep(0)  # гарантія, що це справді корутина
+        return list(self._VOICES)
+
+    async def get_speed_range(self) -> Tuple[float, float]:
+        """Діапазон допустимих швидкостей."""
+        await asyncio.sleep(0)
+        return (self._MIN_SPEED, self._MAX_SPEED)
+
+    # ---------- Основний метод генерації ----------
+
+    async def generate_speech_with_validation(self, text: str, voice: Optional[str], speed: Optional[float]) -> bytes:
+        """
+        Перевіряє параметри і генерує mp3-байти.
+        Кидає виняток із читабельним повідомленням у разі провалу.
+        """
+        if not text or not text.strip():
+            raise ValueError("Порожній текст для озвучки")
+
+        # Валідація голосу/швидкості
+        voice = (voice or self.voice or self._DEFAULT_VOICE).lower()
+        if voice not in self._VOICES:
+            raise ValueError(f"Непідтримуваний голос: {voice}. Доступні: {', '.join(self._VOICES)}")
+
+        if speed is None:
+            speed = self.speed or self._DEFAULT_SPEED
+        try:
+            speed = float(speed)
+        except Exception:
+            raise ValueError("Швидкість має бути числом")
+
+        if not (self._MIN_SPEED <= speed <= self._MAX_SPEED):
+            raise ValueError(f"Швидкість повинна бути від {self._MIN_SPEED} до {self._MAX_SPEED}")
+
+        # Робимо кілька спроб із бекофом
+        backoff = 1.0
+        last_err: Optional[Exception] = None
+
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                return await self._request_tts(text=text, voice=voice, speed=speed)
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code
+                body = _safe_err_text(e.response)
+                # 429/5xx — має сенс спробувати ще
+                if status == 429 or 500 <= status < 600:
+                    last_err = e
+                    logger.warning(f"TTS {status} attempt {attempt}/{self.max_retries}: {body}")
+                else:
+                    # 4xx (крім 429) — не ретраїмо
+                    msg = body or str(e)
+                    raise RuntimeError(f"OpenAI TTS HTTP {status}: {msg}") from e
+            except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+                last_err = e
+                logger.warning(f"TTS network timeout/errno attempt {attempt}/{self.max_retries}: {e}")
+            except Exception as e:
+                # інші помилки — можна одну-другу спробу, але зазвичай краще відразу падати
+                last_err = e
+                logger.warning(f"TTS unexpected error attempt {attempt}/{self.max_retries}: {e}")
+
+            if attempt < self.max_retries:
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 6.0)
+
+        # якщо сюди дійшли — все погано
+        if isinstance(last_err, (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError)):
+            raise RuntimeError("HTTP Client says - Request timeout error") from last_err
+        raise RuntimeError(f"TTS failed after {self.max_retries} attempts: {last_err}")
+
+    # ---------- Низькорівневий запит ----------
+
+    async def _request_tts(self, text: str, voice: str, speed: float) -> bytes:
+        """
+        Виконує один запит до OpenAI TTS і повертає mp3 байти.
+        """
+        payload = {
+            "model": self.model,
+            "voice": voice,
+            "input": text,
+            # OpenAI дозволяє scale швидкості (0.25–4.0)
+            "speed": speed,
+            # одразу просимо mp3
+            "format": "mp3",
+        }
+
+        resp = await self._client.post("/audio/speech", json=payload)
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError:
+            # Дамо шанс зовнішньому обробнику
+            raise
+
+        # В API /audio/speech повертається application/octet-stream (тіло — бінарне)
+        return resp.content
+
+    # ---------- Закриття клієнта ----------
+
+    async def aclose(self):
+        """Закрити httpx.AsyncClient (виклич у on_shutdown)."""
+        try:
+            await self._client.aclose()
+        except Exception as e:
+            logger.warning(f"Помилка при закритті httpx клієнта TTS: {e}")
+
+
+# ---------- Сінглтон-фабрика ----------
+_instance: Optional[OpenAITTSService] = None
+
 
 def get_openai_tts_service() -> OpenAITTSService:
-    """Отримання екземпляра сервісу OpenAI TTS"""
-    global openai_tts_service
-    if openai_tts_service is None:
-        openai_tts_service = OpenAITTSService()
-    return openai_tts_service
+    global _instance
+    if _instance is None:
+        _instance = OpenAITTSService()
+    return _instance
+
+
+# ---------- Утиліти ----------
+
+def _safe_err_text(response: httpx.Response) -> str:
+    try:
+        data = response.json()
+        # OpenAI зазвичай повертає {"error": {"message": "..."}}
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict):
+                return err.get("message") or str(data)
+        return str(data)
+    except Exception:
+        # як fallback — обрізати текст до 500 символів
+        t = response.text
+        return (t[:500] + "...") if t and len(t) > 500 else (t or "")
