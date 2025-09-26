@@ -231,27 +231,6 @@ async def send_voice_with_retry(chat_id: int, voice_bytes: bytes, caption: str =
                 raise
             await asyncio.sleep(0.7 * attempt)
 
-async def send_photo_with_retry(chat_id: int, photo: BufferedInputFile, caption: str = None, parse_mode: str = "HTML", max_attempts: int = 3):
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return await bot.send_photo(chat_id, photo=photo, caption=caption, parse_mode=parse_mode)
-        except TelegramRetryAfter as e:
-            await asyncio.sleep(int(getattr(e, "retry_after", 1)))
-        except TelegramNetworkError:
-            if attempt == max_attempts:
-                raise
-            await asyncio.sleep(0.7 * attempt)
-
-async def send_media_group_with_retry(chat_id: int, media: list[InputMediaPhoto], max_attempts: int = 3):
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return await bot.send_media_group(chat_id, media=media)
-        except TelegramRetryAfter as e:
-            await asyncio.sleep(int(getattr(e, "retry_after", 1)))
-        except TelegramNetworkError:
-            if attempt == max_attempts:
-                raise
-            await asyncio.sleep(0.7 * attempt)
 # -------------------------------------------------------------------
 # ---------- Хелпер для безпечного отримання списку голосів/діапазону швидкості ----------
 async def _tts_hint(tts_service) -> str:
